@@ -598,16 +598,36 @@ function stampBurst(status){
   setTimeout(()=>el.remove(),750);
 }
 
-/* ---------- shared cross-device storage ---------- */
+/* ---------- shared cross-device storage (with local fallback) ---------- */
+const SHARED_AVAILABLE = (typeof window.storage !== 'undefined') && window.storage && typeof window.storage.get === 'function';
+
 async function getUser(roll){
-  try{
-    const res = await window.storage.get(`user:${roll}`, true);
-    if(!res || !res.value) return null;
-    return JSON.parse(res.value);
-  }catch(e){ return null; }
+  if(SHARED_AVAILABLE){
+    try{
+      const res = await window.storage.get(`user:${roll}`, true);
+      if(!res || !res.value) return null;
+      return JSON.parse(res.value);
+    }catch(e){ return null; } // key not found is expected here — not an error
+  }
+  const raw = localStorage.getItem(`fallback:user:${roll}`);
+  return raw ? JSON.parse(raw) : null;
 }
+
 async function setUser(user){
-  await window.storage.set(`user:${user.rollNo}`, JSON.stringify(user), true);
+  if(SHARED_AVAILABLE){
+    await window.storage.set(`user:${user.rollNo}`, JSON.stringify(user), true); // lets a real failure throw, so save issues surface instead of being swallowed
+    return;
+  }
+  localStorage.setItem(`fallback:user:${user.rollNo}`, JSON.stringify(user));
+}
+
+function showSyncBanner(){
+  if(SHARED_AVAILABLE) return;
+  const b = document.createElement("div");
+  b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:80;background:#7a4a12;color:#fff;text-align:center;padding:9px 14px;font:600 12.5px 'IBM Plex Mono',monospace;letter-spacing:.02em;";
+  b.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Cross-device sync is off in this view — data is saved to this browser only. Open this app through its Claude artifact link (not a downloaded file) to sync across devices.';
+  document.body.prepend(b);
+  document.body.style.paddingTop = "42px";
 }
 
 /* one-time migration of any data from the old single-device localStorage version */
@@ -673,7 +693,7 @@ document.getElementById("registerBtn").addEventListener("click", async ()=>{
     document.getElementById("regName").value=""; document.getElementById("regRoll").value="";
     document.getElementById("regPass").value=""; document.getElementById("regConfirm").value="";
   }catch(e){
-    showToast("Couldn't reach the ledger. Check your connection and try again.");
+    showToast(SHARED_AVAILABLE ? "Couldn't reach the shared ledger. Check your connection and try again." : "Couldn't save. Try again — this browser is storing locally only.");
   }
   setBtnLoading(btn,false);
 });
@@ -692,7 +712,7 @@ document.getElementById("loginBtn").addEventListener("click", async ()=>{
     sessionStorage.setItem("loggedInRoll", roll);
     openDashboard();
   }catch(e){
-    showToast("Couldn't reach the ledger. Check your connection and try again.");
+    showToast(SHARED_AVAILABLE ? "Couldn't reach the shared ledger. Check your connection and try again." : "Couldn't sign in. Try again — this browser is storing locally only.");
   }
   setBtnLoading(btn,false);
 });
@@ -882,6 +902,7 @@ document.getElementById("resetAttendanceBtn").addEventListener("click", async ()
 
 /* ---------- boot ---------- */
 window.addEventListener("load", async ()=>{
+  showSyncBanner();
   await migrateLegacyData();
   const roll = sessionStorage.getItem("loggedInRoll");
   if(roll){
